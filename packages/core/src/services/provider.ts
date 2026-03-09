@@ -29,21 +29,25 @@ export class ProviderService {
   private initializeFromProvidersArray(providersConfig: ConfigProvider[]) {
     providersConfig.forEach((providerConfig: ConfigProvider) => {
       try {
+        const normalizedProviderConfig = this.normalizeProviderConfig(
+          providerConfig as ConfigProvider & { api?: string }
+        );
+
         if (
-          !providerConfig.name ||
-          !providerConfig.api_base_url ||
-          !providerConfig.api_key
+          !normalizedProviderConfig.name ||
+          !normalizedProviderConfig.api_base_url ||
+          !normalizedProviderConfig.api_key
         ) {
           return;
         }
 
         const transformer: LLMProvider["transformer"] = {}
 
-        if (providerConfig.transformer) {
-          Object.keys(providerConfig.transformer).forEach(key => {
+        if (normalizedProviderConfig.transformer) {
+          Object.keys(normalizedProviderConfig.transformer).forEach(key => {
             if (key === 'use') {
-              if (Array.isArray(providerConfig.transformer.use)) {
-                transformer.use = providerConfig.transformer.use.map((transformer) => {
+              if (Array.isArray(normalizedProviderConfig.transformer.use)) {
+                transformer.use = normalizedProviderConfig.transformer.use.map((transformer) => {
                   if (Array.isArray(transformer) && typeof transformer[0] === 'string') {
                     const Constructor = this.transformerService.getTransformer(transformer[0]);
                     if (Constructor) {
@@ -60,9 +64,9 @@ export class ProviderService {
                 }).filter((transformer) => typeof transformer !== 'undefined');
               }
             } else {
-              if (Array.isArray(providerConfig.transformer[key]?.use)) {
+              if (Array.isArray(normalizedProviderConfig.transformer[key]?.use)) {
                 transformer[key] = {
-                  use: providerConfig.transformer[key].use.map((transformer) => {
+                  use: normalizedProviderConfig.transformer[key].use.map((transformer) => {
                     if (Array.isArray(transformer) && typeof transformer[0] === 'string') {
                       const Constructor = this.transformerService.getTransformer(transformer[0]);
                       if (Constructor) {
@@ -84,17 +88,66 @@ export class ProviderService {
         }
 
         this.registerProvider({
-          name: providerConfig.name,
-          baseUrl: providerConfig.api_base_url,
-          apiKey: providerConfig.api_key,
-          models: providerConfig.models || [],
-          transformer: providerConfig.transformer ? transformer : undefined,
+          name: normalizedProviderConfig.name,
+          baseUrl: normalizedProviderConfig.api_base_url,
+          apiKey: normalizedProviderConfig.api_key,
+          models: normalizedProviderConfig.models || [],
+          transformer: this.hasTransformerEntries(transformer)
+            ? transformer
+            : undefined,
         });
 
-        this.logger.info(`${providerConfig.name} provider registered`);
+        this.logger.info(`${normalizedProviderConfig.name} provider registered`);
       } catch (error) {
         this.logger.error(`${providerConfig.name} provider registered error: ${error}`);
       }
+    });
+  }
+
+  private normalizeProviderConfig(
+    providerConfig: ConfigProvider & { api?: string }
+  ): ConfigProvider {
+    const apiTransformerName =
+      typeof providerConfig.api === "string" ? providerConfig.api.trim() : "";
+
+    if (!apiTransformerName) {
+      return providerConfig;
+    }
+
+    if (!this.transformerService.hasTransformer(apiTransformerName)) {
+      this.logger.warn(
+        `Provider '${providerConfig.name}' references unknown api transformer '${apiTransformerName}'`
+      );
+      return providerConfig;
+    }
+
+    const transformerConfig = providerConfig.transformer
+      ? { ...providerConfig.transformer }
+      : {};
+    const currentUse = Array.isArray(transformerConfig.use)
+      ? [...transformerConfig.use]
+      : [];
+    const alreadyConfigured = currentUse.some((item) =>
+      Array.isArray(item) ? item[0] === apiTransformerName : item === apiTransformerName
+    );
+
+    if (!alreadyConfigured) {
+      transformerConfig.use = [apiTransformerName, ...currentUse];
+    }
+
+    return {
+      ...providerConfig,
+      transformer: transformerConfig as ConfigProvider["transformer"],
+    };
+  }
+
+  private hasTransformerEntries(transformer: LLMProvider["transformer"]): boolean {
+    return Object.entries(transformer).some(([key, value]) => {
+      if (key === "use") {
+        return Array.isArray(value) && value.length > 0;
+      }
+
+      return Array.isArray(value?.use) && value.use.length > 0;
     });
   }
 
@@ -263,6 +316,7 @@ export class ProviderService {
 
     this.providers.forEach((provider) => {
       provider.models.forEach((model) => {
+        // Return model name as primary ID (what Claude Code expects)
         models.push({
           id: model,
           object: "model",
@@ -270,6 +324,7 @@ export class ProviderService {
           provider: provider.name,
         });
 
+        // Also include provider,model format for compatibility
         models.push({
           id: `${provider.name},${model}`,
           object: "model",

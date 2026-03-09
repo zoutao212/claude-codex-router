@@ -1,5 +1,26 @@
-import { UnifiedChatRequest, MessageContent } from "@/types/llm";
+import {
+  Annotation,
+  LLMProvider,
+  MessageContent,
+  UnifiedChatRequest,
+} from "@/types/llm";
 import { Transformer } from "@/types/transformer";
+
+interface ResponsesAPIAnnotation {
+  url?: string;
+  title?: string;
+  start_index?: number;
+  end_index?: number;
+}
+
+interface ResponsesAPIOutputContentItem {
+  type: string;
+  text?: string;
+  image_url?: string;
+  mime_type?: string;
+  image_base64?: string;
+  annotations?: ResponsesAPIAnnotation[];
+}
 
 interface ResponsesAPIOutputItem {
   type: string;
@@ -7,13 +28,7 @@ interface ResponsesAPIOutputItem {
   call_id?: string;
   name?: string;
   arguments?: string;
-  content?: Array<{
-    type: string;
-    text?: string;
-    image_url?: string;
-    mime_type?: string;
-    image_base64?: string;
-  }>;
+  content?: ResponsesAPIOutputContentItem[];
   reasoning?: string;
 }
 
@@ -34,6 +49,10 @@ interface ResponsesStreamEvent {
   type: string;
   item_id?: string;
   output_index?: number;
+  annotation?: ResponsesAPIAnnotation;
+  part?: {
+    type?: string;
+  };
   delta?:
     | string
     | {
@@ -46,13 +65,8 @@ interface ResponsesStreamEvent {
     type?: string;
     call_id?: string;
     name?: string;
-    content?: Array<{
-      type: string;
-      text?: string;
-      image_url?: string;
-      mime_type?: string;
-    }>;
-    reasoning?: string; // 添加 reasoning 字段支持
+    content?: ResponsesAPIOutputContentItem[];
+    reasoning?: string;
   };
   response?: {
     id?: string;
@@ -61,16 +75,18 @@ interface ResponsesStreamEvent {
       type: string;
     }>;
   };
-  reasoning_summary?: string; // 添加推理摘要支持
+  reasoning_summary?: string;
 }
 
 export class OpenAIResponsesTransformer implements Transformer {
   name = "openai-responses";
   endPoint = "/v1/responses";
+  logger?: any;
 
   async transformRequestIn(
-    request: UnifiedChatRequest
-  ): Promise<UnifiedChatRequest> {
+    request: UnifiedChatRequest,
+    provider: LLMProvider
+  ): Promise<UnifiedChatRequest | { body: UnifiedChatRequest; config: { url: URL } }> {
     delete request.temperature;
     delete request.max_tokens;
 
@@ -84,25 +100,18 @@ export class OpenAIResponsesTransformer implements Transformer {
 
     const input: any[] = [];
 
-    const systemMessages = request.messages.filter(
-      (msg) => msg.role === "system"
-    );
+    const systemMessages = request.messages.filter((msg) => msg.role === "system");
     if (systemMessages.length > 0) {
       const firstSystem = systemMessages[0];
       if (Array.isArray(firstSystem.content)) {
-        firstSystem.content.forEach((item) => {
-          let text = "";
-          if (typeof item === "string") {
-            text = item;
-          } else if (item && typeof item === "object" && "text" in item) {
-            text = (item as { text: string }).text;
-          }
-          input.push({
-            role: "system",
-            content: text,
-          });
-        });
-      } else {
+        const instructions = firstSystem.content
+          .map((item) => (item.type === "text" ? item.text : ""))
+          .filter(Boolean)
+          .join("\n");
+        if (instructions) {
+          (request as any).instructions = instructions;
+        }
+      } else if (typeof firstSystem.content === "string") {
         (request as any).instructions = firstSystem.content;
       }
     }
@@ -128,7 +137,10 @@ export class OpenAIResponsesTransformer implements Transformer {
         const toolMessage: any = { ...message };
         toolMessage.type = "function_call_output";
         toolMessage.call_id = message.tool_call_id;
-        toolMessage.output = message.content;
+        toolMessage.output =
+          typeof message.content === "string"
+            ? message.content
+            : JSON.stringify(message.content);
         delete toolMessage.cache_control;
         delete toolMessage.role;
         delete toolMessage.tool_call_id;
@@ -138,6 +150,13 @@ export class OpenAIResponsesTransformer implements Transformer {
       }
 
       if (message.role === "assistant" && Array.isArray(message.tool_calls)) {
+        if (this.hasMessageContent(message.content)) {
+          input.push({
+            role: "assistant",
+            content: message.content,
+          });
+        }
+
         message.tool_calls.forEach((tool) => {
           input.push({
             type: "function_call",
@@ -163,8 +182,13 @@ export class OpenAIResponsesTransformer implements Transformer {
       (request as any).tools = request.tools
         .filter((tool) => tool.function.name !== "web_search")
         .map((tool) => {
+          const parameters = {
+            ...tool.function.parameters,
+            properties: { ...tool.function.parameters.properties },
+          };
+
           if (tool.function.name === "WebSearch") {
-            delete tool.function.parameters.properties.allowed_domains;
+            delete parameters.properties.allowed_domains;
           }
           if (tool.function.name === "Edit") {
             return {
@@ -172,7 +196,7 @@ export class OpenAIResponsesTransformer implements Transformer {
               name: tool.function.name,
               description: tool.function.description,
               parameters: {
-                ...tool.function.parameters,
+                ...parameters,
                 required: [
                   "file_path",
                   "old_string",
@@ -187,7 +211,7 @@ export class OpenAIResponsesTransformer implements Transformer {
             type: tool.type,
             name: tool.function.name,
             description: tool.function.description,
-            parameters: tool.function.parameters,
+            parameters,
           };
         });
 
@@ -200,7 +224,12 @@ export class OpenAIResponsesTransformer implements Transformer {
 
     request.parallel_tool_calls = false;
 
-    return request;
+    return {
+      body: request,
+      config: {
+        url: this.buildResponsesUrl(provider.baseUrl),
+      },
+    };
   }
 
   async transformResponseOut(response: Response): Promise<Response> {
@@ -608,10 +637,6 @@ export class OpenAIResponsesTransformer implements Transformer {
   }
 
   private normalizeRequestContent(content: any, role: string | undefined) {
-    // 克隆内容对象并删除缓存控制字段
-    const clone = { ...content };
-    delete clone.cache_control;
-
     if (content.type === "text") {
       return {
         type: role === "assistant" ? "output_text" : "input_text",
@@ -620,7 +645,6 @@ export class OpenAIResponsesTransformer implements Transformer {
     }
 
     if (content.type === "image_url") {
-      console.log(content);
       const imagePayload: Record<string, unknown> = {
         type: role === "assistant" ? "output_image" : "input_image",
       };
@@ -635,32 +659,76 @@ export class OpenAIResponsesTransformer implements Transformer {
     return null;
   }
 
-  private convertResponseToChat(responseData: ResponsesAPIPayload): any {
-    // 从output数组中提取不同类型的输出
-    const messageOutput = responseData.output?.find(
-      (item) => item.type === "message"
-    );
-    const functionCallOutput = responseData.output?.find(
-      (item) => item.type === "function_call"
-    );
-    let annotations;
-    if (
-      messageOutput?.content?.length &&
-      messageOutput?.content[0].annotations
-    ) {
-      annotations = messageOutput.content[0].annotations.map((item) => {
-        return {
-          type: "url_citation",
-          url_citation: {
-            url: item.url || "",
-            title: item.title || "",
-            content: "",
-            start_index: item.start_index || 0,
-            end_index: item.end_index || 0,
-          },
-        };
-      });
+  private buildResponsesUrl(baseUrl: string): URL {
+    const url = new URL(baseUrl);
+    const normalizedPath = url.pathname.replace(/\/+$/, "");
+
+    if (normalizedPath.endsWith("/responses")) {
+      return url;
     }
+
+    if (!normalizedPath || normalizedPath === "/") {
+      url.pathname = "/v1/responses";
+      return url;
+    }
+
+    if (normalizedPath.endsWith("/v1")) {
+      url.pathname = `${normalizedPath}/responses`;
+      return url;
+    }
+
+    url.pathname = `${normalizedPath}/responses`;
+    return url;
+  }
+
+  private hasMessageContent(content: UnifiedChatRequest["messages"][number]["content"]) {
+    if (typeof content === "string") {
+      return content.length > 0;
+    }
+
+    return Array.isArray(content) && content.length > 0;
+  }
+
+  private extractAnnotations(
+    content: ResponsesAPIOutputContentItem[] | undefined
+  ): Annotation[] | undefined {
+    const annotations = (content || [])
+      .flatMap((item) => item.annotations || [])
+      .map((item) => ({
+        type: "url_citation" as const,
+        url_citation: {
+          url: item.url || "",
+          title: item.title || "",
+          content: "",
+          start_index: item.start_index || 0,
+          end_index: item.end_index || 0,
+        },
+      }));
+
+    return annotations.length > 0 ? annotations : undefined;
+  }
+
+  private extractToolCalls(output: ResponsesAPIOutputItem[]) {
+    const toolCalls = output
+      .filter((item) => item.type === "function_call")
+      .map((item) => ({
+        id: item.call_id || item.id || `call_${Date.now()}`,
+        function: {
+          name: item.name || "",
+          arguments: item.arguments || "",
+        },
+        type: "function" as const,
+      }));
+
+    return toolCalls.length > 0 ? toolCalls : null;
+  }
+
+  private convertResponseToChat(responseData: ResponsesAPIPayload): any {
+    const outputItems = responseData.output || [];
+    const messageOutput = [...outputItems]
+      .reverse()
+      .find((item) => item.type === "message");
+    const annotations = this.extractAnnotations(messageOutput?.content);
 
     this.logger.debug({
       data: annotations,
@@ -668,7 +736,7 @@ export class OpenAIResponsesTransformer implements Transformer {
     });
 
     let messageContent: string | MessageContent[] | null = null;
-    let toolCalls = null;
+    const toolCalls = this.extractToolCalls(outputItems);
     let thinking = null;
 
     // 处理推理内容
@@ -678,12 +746,12 @@ export class OpenAIResponsesTransformer implements Transformer {
       };
     }
 
-    if (messageOutput && messageOutput.content) {
+    if (messageOutput?.content) {
       // 分离文本和图片内容
       const textParts: string[] = [];
       const imageParts: MessageContent[] = [];
 
-      messageOutput.content.forEach((item: any) => {
+      messageOutput.content.forEach((item) => {
         if (item.type === "output_text") {
           textParts.push(item.text || "");
         } else if (item.type === "output_image") {
@@ -721,20 +789,6 @@ export class OpenAIResponsesTransformer implements Transformer {
         // 如果只有文本，返回字符串
         messageContent = textParts.join("");
       }
-    }
-
-    if (functionCallOutput) {
-      // 处理function_call类型的输出
-      toolCalls = [
-        {
-          id: functionCallOutput.call_id || functionCallOutput.id,
-          function: {
-            name: functionCallOutput.name,
-            arguments: functionCallOutput.arguments,
-          },
-          type: "function",
-        },
-      ];
     }
 
     // 构建chat格式的响应

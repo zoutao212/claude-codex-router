@@ -74,31 +74,53 @@ class Server {
   tokenizerService: TokenizerService;
 
   constructor(options: ServerOptions = {}) {
+    console.log('Server constructor called');
     const { initialConfig, ...fastifyOptions } = options;
+    console.log('Creating Fastify app...');
     this.app = createApp({
       ...fastifyOptions,
       logger: fastifyOptions.logger ?? true,
     });
+    console.log('Fastify app created');
+
+    console.log('Creating ConfigService...');
     this.configService = new ConfigService(options);
+    console.log('ConfigService created');
+
+    console.log('Creating TransformerService...');
     this.transformerService = new TransformerService(
       this.configService,
       this.app.log
     );
+    console.log('TransformerService created');
+
+    console.log('Creating TokenizerService...');
     this.tokenizerService = new TokenizerService(
       this.configService,
       this.app.log
     );
-    this.transformerService.initialize().finally(() => {
+    console.log('TokenizerService created');
+
+    console.log('Initializing TransformerService...');
+    this.transformerService.initialize().then(() => {
+      console.log('TransformerService initialization completed');
+      console.log('Creating ProviderService...');
       this.providerService = new ProviderService(
         this.configService,
         this.transformerService,
         this.app.log
       );
+      console.log('ProviderService created');
+    }).catch((error) => {
+      console.error('Failed to initialize TransformerService:', error);
     });
+
+    console.log('Initializing TokenizerService...');
     // Initialize tokenizer service
     this.tokenizerService.initialize().catch((error) => {
-      this.app.log.error(`Failed to initialize TokenizerService: ${error}`);
+      console.error(`Failed to initialize TokenizerService: ${error}`);
     });
+    console.log('TokenizerService initialization started');
   }
 
   async register<Options extends FastifyPluginOptions = FastifyPluginOptions>(
@@ -196,9 +218,28 @@ class Server {
   }
 
   async start(): Promise<void> {
+    console.log('🚀 Server.start() method ENTERED');
+    console.log('Server.start() method entered');
+
+    // Ensure providerService is initialized before proceeding
+    if (!this.providerService) {
+      console.log('Waiting for providerService to initialize...');
+      await new Promise(resolve => {
+        const checkInterval = setInterval(() => {
+          if (this.providerService) {
+            clearInterval(checkInterval);
+            resolve(void 0);
+          }
+        }, 100);
+      });
+      console.log('providerService is now initialized');
+    }
+
     try {
+      console.log('Setting app._server = this');
       this.app._server = this;
 
+      console.log('Adding preHandler hook');
       this.app.addHook("preHandler", (req, reply, done) => {
         const url = new URL(`http://127.0.0.1${req.url}`);
         if (url.pathname.endsWith("/v1/messages") && req.body) {
@@ -211,13 +252,15 @@ class Server {
         done();
       });
 
+      console.log('Registering namespace');
       await this.registerNamespace('/')
 
+      console.log('Adding model provider middleware');
       this.app.addHook(
         "preHandler",
         async (req: FastifyRequest, reply: FastifyReply) => {
           const url = new URL(`http://127.0.0.1${req.url}`);
-          if (url.pathname.endsWith("/v1/messages") && req.body) {
+          if ((url.pathname.endsWith("/v1/messages") || url.pathname.endsWith("/v1/chat/completions")) && req.body) {
             try {
               const body = req.body as any;
               if (!body || !body.model) {
@@ -238,11 +281,17 @@ class Server {
         }
       );
 
+      console.log('Server.start() called');
+      const port = parseInt(this.configService.get("PORT") || "3000", 10);
+      const host = this.configService.get("HOST") || "127.0.0.1";
+      console.log(`Attempting to listen on ${host}:${port}`);
 
       const address = await this.app.listen({
-        port: parseInt(this.configService.get("PORT") || "3000", 10),
-        host: this.configService.get("HOST") || "127.0.0.1",
+        port: port,
+        host: host,
       });
+
+      console.log(`Server successfully listening on ${address}`);
 
       this.app.log.info(`🚀 LLMs API server listening on ${address}`);
 
@@ -255,6 +304,10 @@ class Server {
       process.on("SIGINT", () => shutdown("SIGINT"));
       process.on("SIGTERM", () => shutdown("SIGTERM"));
     } catch (error) {
+      console.error('Detailed server startup error:', error);
+      console.error('Error type:', typeof error);
+      console.error('Error message:', error instanceof Error ? error.message : String(error));
+      console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
       this.app.log.error(`Error starting server: ${error}`);
       process.exit(1);
     }

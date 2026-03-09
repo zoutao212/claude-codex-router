@@ -26,16 +26,20 @@ import fastifyMultipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
 
 export const createServer = async (config: any): Promise<any> => {
+  console.log('createServer called with config:', JSON.stringify(config, null, 2));
+  console.log('Creating Server instance...');
   const server = new Server(config);
+  console.log('Server instance created successfully');
   const app = server.app;
 
-  app.register(fastifyMultipart, {
-    limits: {
-      fileSize: 50 * 1024 * 1024, // 50MB
-    },
-  });
+  const countTokensHandler = async (req: any, logDuplicatePrefix = false) => {
+    if (logDuplicatePrefix) {
+      req.log?.warn(
+        { url: req.url },
+        "duplicate_v1_prefix_detected_for_count_tokens"
+      );
+    }
 
-  app.post("/v1/messages/count_tokens", async (req: any, reply: any) => {
     const {messages, tools, system, model} = req.body;
     const tokenizerService = (app as any)._server!.tokenizerService as TokenizerService;
 
@@ -79,7 +83,21 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Default to tiktoken calculation
     const tokenCount = calculateTokenCount(messages, system, tools);
-    return { "input_tokens": tokenCount }
+    return { "input_tokens": tokenCount };
+  };
+
+  app.register(fastifyMultipart, {
+    limits: {
+      fileSize: 50 * 1024 * 1024, // 50MB
+    },
+  });
+
+  app.post("/v1/messages/count_tokens", async (req: any, reply: any) => {
+    return countTokensHandler(req);
+  });
+
+  app.post("/v1/v1/messages/count_tokens", async (req: any, reply: any) => {
+    return countTokensHandler(req, true);
   });
 
   // Add endpoint to read config.json with access control

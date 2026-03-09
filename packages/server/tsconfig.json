@@ -3,8 +3,9 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": "./src",
-    "baseUrl": "./src"
+    "baseUrl": "./src",
+    "typeRoots": ["../../node_modules/@types"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "../../global.d.ts"],
   "exclude": ["node_modules", "dist"]
 }

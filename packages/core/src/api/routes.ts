@@ -51,6 +51,17 @@ async function handleTransformerEndpoint(
   }
 
   try {
+    if (req.url.includes("/v1/v1/")) {
+      req.log.warn(
+        {
+          url: req.url,
+          endpoint: transformer.endPoint,
+          provider: providerName,
+        },
+        "duplicate_v1_prefix_detected"
+      );
+    }
+
     // Process request transformer chain
     const { requestBody, config, bypass } = await processRequestTransformers(
       body,
@@ -465,6 +476,42 @@ function formatResponse(response: any, reply: FastifyReply, body: any) {
 export const registerApiRoutes = async (
   fastify: FastifyInstance
 ) => {
+  const registerV1CompatibleGet = (
+    path: string,
+    handler: Parameters<typeof fastify.get>[1]
+  ) => {
+    fastify.get(path, handler);
+    if (path.startsWith("/v1/")) {
+      fastify.get(`/v1${path}`, handler);
+    }
+  };
+
+  const registerV1CompatiblePost = (
+    path: string,
+    handler: Parameters<typeof fastify.post>[1]
+  ) => {
+    fastify.post(path, handler);
+    if (path.startsWith("/v1/")) {
+      fastify.post(`/v1${path}`, handler);
+    }
+  };
+
+  // Add /v1/models endpoint for Claude Code model discovery
+  registerV1CompatibleGet("/v1/models", async (request, reply) => {
+    try {
+      if (request.url.includes("/v1/v1/")) {
+        request.log.warn(
+          { url: request.url },
+          "duplicate_v1_prefix_detected_for_models"
+        );
+      }
+      return await fastify.providerService.getAvailableModels();
+    } catch (error) {
+      fastify.log.error("Error in /v1/models:", error);
+      throw createApiError("Failed to get models", 500, "models_error");
+    }
+  });
+
   // Health and info endpoints
   fastify.get("/", async () => {
     return { message: "LLMs API", version };
@@ -479,7 +526,7 @@ export const registerApiRoutes = async (
 
   for (const { transformer } of transformersWithEndpoint) {
     if (transformer.endPoint) {
-      fastify.post(
+      registerV1CompatiblePost(
         transformer.endPoint,
         async (req: FastifyRequest, reply: FastifyReply) => {
           return handleTransformerEndpoint(req, reply, fastify, transformer);

@@ -1,0 +1,9 @@
+claude-code-router 是一个“协议入口兼容层 + 路由层 + provider 适配层”的多包工程，目标不是单纯转发请求，而是在尽量不改 Claude Code 使用习惯的前提下，把不同厂商、不同端点格式的模型统一接入到同一条工作流里。系统核心价值在于：上游客户端可以继续使用 Claude Code 的 /v1/messages 或 OpenAI 风格的 /v1/chat/completions，而下游 provider 可以是 OpenAI、Anthropic、Gemini，或任何需要额外 transformer 才能兼容的变种接口。
+
+packages/core 是协议与转换核心。Server 在这里注册所有 transformer endpoint，ProviderService 负责把配置文件中的 provider 实例化成可路由目标，TransformerService 负责装配内置与自定义 transformer。真正的兼容关键在 transformer 链：入口 transformer 把客户端请求转成统一结构，provider transformer 再把统一结构改写成下游模型需要的协议，响应方向则按相反顺序回卷，最终再转换回 Claude Code 或 OpenAI 客户端能够消费的格式。
+
+packages/server 是运行时封装层，负责配置加载、鉴权、日志、插件、preset namespace 和对 Claude Code 运行时的兼容增强。packages/cli 提供启动、激活、模型管理和 preset 管理命令。packages/ui 提供配置界面与调试入口。shared 主要承载 preset、常量和配置复用能力。整个工程的真实复杂度不在单一接口，而在“路由决策 + 协议转换 + tool calling + 流式响应”这四条链路的叠加。
+
+当前清理方向应继续围绕 transformer 收敛，尤其是 openai-responses 这类非 chat/completions 端点适配器。最近一次调整重点是：让仅支持 /v1/responses 的 provider 更稳定地向外暴露 /v1/chat/completions 与 /v1/messages 兼容能力，减少 tool 调用内容丢失、只取首个 function_call、调试残留输出等会污染复杂工作流的问题。后续若继续优化，应优先清理重复 transformer 逻辑、减少隐式 mutation，并补齐关键 provider 的最小可运行配置示例。
+
+Provider bootstrap is now treated as part of protocol compatibility instead of a passive config load step. A provider may express its transport intent either through explicit `transformer.use` or a shorthand `api` field, and endpoint-style transformers must be able to normalize incomplete base URLs such as `/v1` into the actual downstream target they need. This keeps Claude-facing routes stable even when provider configs come from mixed sources or older presets.

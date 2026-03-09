@@ -437,15 +437,33 @@ async function getServer(options: RunOptions = {}) {
 }
 
 async function run() {
-  const server = await getServer();
-  server.app.post("/api/restart", async () => {
-    setTimeout(async () => {
-      process.exit(0);
-    }, 100);
+  try {
+    console.log('Initializing server...');
+    const server = await getServer();
+    console.log('Server instance created successfully');
 
-    return { success: true, message: "Service restart initiated" }
-  });
-  await server.start();
+    server.app.post("/api/restart", async () => {
+      setTimeout(async () => {
+        process.exit(0);
+      }, 100);
+
+      return { success: true, message: "Service restart initiated" }
+    });
+
+    console.log('About to call server.start()...');
+    console.log('Server object properties:', Object.keys(server));
+    console.log('Server.start method exists:', typeof server.start);
+    console.log('Calling server.start() synchronously...');
+    const startPromise = server.start();
+    console.log('startPromise created:', startPromise instanceof Promise);
+    console.log('Starting server...');
+    await startPromise;
+    console.log('Server started successfully');
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    process.exit(1);
+  }
 }
 
 export { getServer };

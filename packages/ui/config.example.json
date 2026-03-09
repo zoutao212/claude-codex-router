@@ -160,6 +160,19 @@
       }
     },
     {
+      "name": "openai-responses",
+      "api_base_url": "https://api.openai.com/v1/responses",
+      "api_key": "sk-xxx",
+      "models": [
+        "gpt-5.4"
+      ],
+      "transformer": {
+        "use": [
+          "openai-responses"
+        ]
+      }
+    },
+    {
       "name": "azure",
       "api_base_url": "https://your-resource-name.openai.azure.com/",
       "api_key": "",
