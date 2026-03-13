@@ -36,6 +36,7 @@ echo ========================================
 echo Mode: Production (optimized build)
 echo Config: C:\Users\zouta\.claude-code-router\config.json
 echo Provider: novacode (GPT-5.4)
+echo Upstream Retry: 15s window, max 5 attempts, exponential backoff
 echo ========================================
 echo.
 echo Server will be available at:
@@ -55,6 +56,11 @@ if not "%1"=="" (
     set PORT=%1
     echo Using custom port: %PORT%
 )
+
+REM Set upstream retry configuration for production
+set CCR_UPSTREAM_RETRY_TOTAL_MS=15000
+set CCR_UPSTREAM_RETRY_MAX=5
+set CCR_UPSTREAM_RETRY_BASE_MS=300
 
 node dist\cli.js --port %PORT%
 

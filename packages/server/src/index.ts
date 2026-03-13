@@ -176,6 +176,16 @@ async function getServer(options: RunOptions = {}) {
           compress: false,
           maxSize: "50M"
         }),
+        // Add console output for important events
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            colorize: false,
+            ignore: 'pid,hostname',
+            messageKey: 'msg',
+            translateTime: 'HH:mm:ss.SSS'
+          }
+        }
       };
     } else {
       loggerConfig = false;
@@ -258,6 +268,16 @@ async function getServer(options: RunOptions = {}) {
         req.agents = useAgents;
       }
     }
+  });
+  serverInstance.addHook("onRequest", async (request: any, reply: any) => {
+    request.log.info({
+      phase: "incoming_request",
+      reqId: request.id,
+      method: request.method,
+      url: request.url,
+      remoteAddress: request.ip,
+      remotePort: request.socket.remotePort,
+    }, "incoming request");
   });
   serverInstance.addHook("onError", async (request: any, reply: any, error: any) => {
     try {

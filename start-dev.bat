@@ -4,6 +4,9 @@ echo Starting Claude Code Router (DEV MODE)
 echo ========================================
 echo.
 
+REM Set UTF-8 encoding for console
+chcp 65001 >nul
+
 echo Checking if packages need building...
 if not exist "packages\core\dist" (
     echo Building core package...
@@ -45,6 +48,9 @@ echo.
 
 set CCR_TRACE=1
 set SERVICE_PORT=8082
+set CCR_UPSTREAM_RETRY_TOTAL_MS=15000
+set CCR_UPSTREAM_RETRY_MAX=5
+set CCR_UPSTREAM_RETRY_BASE_MS=300
 pnpm.cmd dev:server
 
 pause

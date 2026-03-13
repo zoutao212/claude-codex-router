@@ -238,6 +238,32 @@ export function traceLog(record: TraceRecord): void {
   if (process.env.CCR_TRACE_CONSOLE === "1") {
     consoleLog(safe as TraceRecord);
   }
+
+  // Always log important events to console for operational visibility
+  const phase = String(record.phase || "unknown");
+  const isImportant = [
+    "incoming_request",
+    "request_completed", 
+    "request_error",
+    "upstream_retry",
+    "provider_response_error"
+  ].includes(phase);
+  
+  if (isImportant) {
+    const reqId = typeof record.reqId === "string" ? record.reqId : "";
+    const status = record.status || record.statusCode || "";
+    const retryAttempt = record.retryAttempt || "";
+    const retryMax = record.retryMax || "";
+    const bodySha256 = (typeof record.bodySha256 === "string" && record.bodySha256) ? record.bodySha256.slice(0, 8) + "..." : "";
+    
+    let consoleMsg = `[CCR] ${phase}`;
+    if (reqId) consoleMsg += ` ${reqId}`;
+    if (status) consoleMsg += ` status:${status}`;
+    if (retryAttempt && retryMax) consoleMsg += ` retry:${retryAttempt}/${retryMax}`;
+    if (bodySha256) consoleMsg += ` hash:${bodySha256}`;
+    
+    console.log(consoleMsg);
+  }
 }
 
 // Export a one-time init logger to help verify tracing works at startup
