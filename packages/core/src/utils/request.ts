@@ -73,6 +73,22 @@ export function sendUnifiedRequest(
   lastRequestBodySha256 = bodySha256;
   lastRequestBodySha256AtMs = nowMs;
 
+  const retryMax = Number.parseInt(process.env.CCR_UPSTREAM_RETRY_MAX || "2", 10);
+  const retryTotalMs = Number.parseInt(process.env.CCR_UPSTREAM_RETRY_TOTAL_MS || "5000", 10);
+  const retryBaseMs = Number.parseInt(process.env.CCR_UPSTREAM_RETRY_BASE_MS || "300", 10);
+
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const shouldRetryStatus = (status: number) => status === 502 || status === 503 || status === 504;
+
+  const shouldRetryResponse = (response: Response) => {
+    const ct = response.headers.get("Content-Type") || "";
+    // Never retry once the upstream is a stream. Retrying would duplicate side effects
+    // and is not safe after the body starts.
+    if (ct.includes("text/event-stream")) return false;
+    return shouldRetryStatus(response.status);
+  };
+
   logger?.debug(
     {
       reqId: context.req.id,
@@ -84,13 +100,82 @@ export function sendUnifiedRequest(
         possible_retry,
         windowMs: 5_000,
       },
+      retryAttempt: 0,
+      retryMax,
       requestUrl: typeof url === "string" ? url : url.toString(),
       useProxy: config.httpsProxy,
     },
     "final request"
   );
 
-  return fetch(typeof url === "string" ? url : url.toString(), fetchOptions).then(
+  const fetchWithRetries = async () => {
+    const requestUrl = typeof url === "string" ? url : url.toString();
+    const startMs = Date.now();
+
+    for (let attempt = 0; attempt <= retryMax; attempt++) {
+      try {
+        const response = await fetch(requestUrl, fetchOptions);
+
+        if (attempt < retryMax && shouldRetryResponse(response)) {
+          logger?.warn?.(
+            {
+              reqId: context.req.id,
+              bodySha256,
+              retryAttempt: attempt + 1,
+              retryMax,
+              status: response.status,
+              requestUrl,
+            },
+            "upstream_retry"
+          );
+
+          // Drain/close body quickly to free resources before retry
+          try {
+            response.body?.cancel();
+          } catch {}
+
+          const elapsed = Date.now() - startMs;
+          const delay = Math.min(retryBaseMs * Math.pow(2, attempt), 2_000);
+          if (elapsed + delay > retryTotalMs) {
+            return response;
+          }
+          await sleep(delay);
+          continue;
+        }
+
+        return response;
+      } catch (error) {
+        if (attempt < retryMax) {
+          logger?.warn?.(
+            {
+              reqId: context.req.id,
+              bodySha256,
+              retryAttempt: attempt + 1,
+              retryMax,
+              retryTotalMs,
+              retryBaseMs,
+              error: error instanceof Error ? error.message : String(error),
+              requestUrl,
+            },
+            "upstream_retry"
+          );
+          const elapsed = Date.now() - startMs;
+          const delay = Math.min(retryBaseMs * Math.pow(2, attempt), 2_000);
+          if (elapsed + delay > retryTotalMs) {
+            throw error;
+          }
+          await sleep(delay);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    // unreachable
+    return fetch(requestUrl, fetchOptions);
+  };
+
+  return fetchWithRetries().then(
     async (response) => {
       try {
         traceLog({
