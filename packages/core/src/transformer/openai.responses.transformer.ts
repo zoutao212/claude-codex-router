@@ -83,6 +83,7 @@ export class OpenAIResponsesTransformer implements Transformer {
   name = "openai-responses";
   endPoint = "/v1/responses";
   logger?: any;
+  private _encodingWarningLogged = false;
 
   async transformRequestIn(
     request: UnifiedChatRequest,
@@ -229,7 +230,13 @@ export class OpenAIResponsesTransformer implements Transformer {
       body: request,
       config: {
         url: this.buildResponsesUrl(provider.baseUrl),
-      },
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Accept': 'text/event-stream, application/json, */*',
+          'Accept-Charset': 'utf-8',
+          'User-Agent': 'claude-code-router/2.0.0'
+        }
+      } as any,
     };
   }
 
@@ -261,7 +268,7 @@ export class OpenAIResponsesTransformer implements Transformer {
         return response;
       }
 
-      const decoder = new TextDecoder();
+      const decoder = new TextDecoder('utf-8', { fatal: false, ignoreBOM: true });
       const encoder = new TextEncoder();
       let buffer = ""; // 用于缓冲不完整的数据
       let isStreamEnded = false;
@@ -286,6 +293,53 @@ export class OpenAIResponsesTransformer implements Transformer {
             return currentIndex;
           };
 
+          // 安全的JSON解析函数，处理不完整的JSON数据
+          const safeJsonParse = (jsonStr: string): any => {
+            try {
+              return JSON.parse(jsonStr);
+            } catch (e) {
+              // 检查是否是不完整的UTF-8字符序列
+              if (jsonStr.length > 0) {
+                // 检查字符串末尾是否可能是不完整的多字节字符
+                const lastChar = jsonStr.charCodeAt(jsonStr.length - 1);
+                if ((lastChar >= 0xD800 && lastChar <= 0xDBFF) || // UTF-16 高代理项
+                    (lastChar >= 0x80 && lastChar <= 0xFF)) { // 可能的UTF-8多字节字符开始
+                  return null; // 表示需要更多数据
+                }
+              }
+              throw e;
+            }
+          };
+
+          // 改进的行处理函数，确保UTF-8字符完整性
+          const processLines = (lines: string[]) => {
+            const processedLines: string[] = [];
+            let currentLine = "";
+            
+            for (const line of lines) {
+              if (line.trim() === "") continue;
+              
+              if (currentLine) {
+                currentLine += line;
+              } else {
+                currentLine = line;
+              }
+              
+              // 检查是否是完整的SSE行
+              if (currentLine.endsWith('\n') || currentLine.includes('\n\n')) {
+                processedLines.push(currentLine);
+                currentLine = "";
+              }
+            }
+            
+            if (currentLine) {
+              // 保留不完整的行到缓冲区
+              buffer = currentLine;
+            }
+            
+            return processedLines;
+          };
+
           try {
             while (true) {
               const { done, value } = await reader.read();
@@ -301,9 +355,10 @@ export class OpenAIResponsesTransformer implements Transformer {
               const chunk = decoder.decode(value, { stream: true });
               buffer += chunk;
 
-              // 处理缓冲区中完整的数据行
-              let lines = buffer.split(/\r?\n/);
-              buffer = lines.pop() || ""; // 最后一行可能不完整，保留在缓冲区
+              // 使用标准方式切分行：永远保留最后一个可能不完整的行到 buffer
+              // 这能避免 chunk 在任意位置断开时丢失 `data:` JSON
+              const lines = buffer.split(/\r?\n/);
+              buffer = lines.pop() || "";
 
               for (const line of lines) {
                 if (!line.trim()) continue;
@@ -321,7 +376,13 @@ export class OpenAIResponsesTransformer implements Transformer {
                     }
 
                     try {
-                      const data: ResponsesStreamEvent = JSON.parse(dataStr);
+                      const data: ResponsesStreamEvent = safeJsonParse(dataStr);
+                      
+                      // 如果安全解析返回null，说明需要更多数据，将数据保留在缓冲区
+                      if (data === null) {
+                        buffer = "data: " + dataStr + "\n" + buffer;
+                        continue;
+                      }
 
                       // 根据不同的事件类型转换为chat格式
                       if (data.type === "response.output_text.delta") {
@@ -659,15 +720,46 @@ export class OpenAIResponsesTransformer implements Transformer {
                         );
                       }
                     } catch (e) {
-                      // 如果JSON解析失败，传递原始行
-                      controller.enqueue(encoder.encode(line + "\n"));
+                      // 改进的错误处理：检查是否是编码问题
+                      // 减少日志刷屏，只在调试模式下输出详细信息
+                      if (transformer.logger?.debug) {
+                        transformer.logger.debug("JSON parse error for data:", dataStr, "Error:", e);
+                      }
+                      
+                      // 如果数据包含非ASCII字符，可能是编码问题
+                      if (/[\u0080-\uFFFF]/.test(dataStr)) {
+                        // 减少警告频率，只在第一次遇到时输出
+                        if (!transformer._encodingWarningLogged) {
+                          console.warn("Detected non-ASCII characters in stream, might be encoding issue");
+                          transformer._encodingWarningLogged = true;
+                        }
+                        // 尝试作为原始文本传递，而不是丢弃
+                        const textChunk = {
+                          id: "chatcmpl-" + Date.now(),
+                          object: "chat.completion.chunk",
+                          created: Math.floor(Date.now() / 1000),
+                          model: "gpt-5-codex",
+                          choices: [{
+                            index: 0,
+                            delta: { content: dataStr },
+                            finish_reason: null,
+                          }],
+                        };
+                        controller.enqueue(encoder.encode(`data: ${JSON.stringify(textChunk)}\n\n`));
+                      } else {
+                        // 对于其他错误，传递原始行
+                        controller.enqueue(encoder.encode(line + "\n"));
+                      }
                     }
                   } else {
                     // 传递其他行
                     controller.enqueue(encoder.encode(line + "\n"));
                   }
                 } catch (error) {
-                  console.error("Error processing line:", line, error);
+                  // 减少错误日志刷屏，只在调试模式下输出详细信息
+                  if (transformer.logger?.debug) {
+                    transformer.logger.debug("Error processing line:", line, error);
+                  }
                   // 如果解析失败，直接传递原始行
                   controller.enqueue(encoder.encode(line + "\n"));
                 }
@@ -685,13 +777,21 @@ export class OpenAIResponsesTransformer implements Transformer {
               controller.enqueue(encoder.encode(doneChunk));
             }
           } catch (error) {
-            console.error("Stream error:", error);
+            // 减少错误日志刷屏，只在调试模式下输出详细信息
+            if (transformer.logger?.debug) {
+              transformer.logger.debug("Stream error:", error);
+            } else {
+              console.error("Stream error:", (error as Error)?.message || error);
+            }
             controller.error(error);
           } finally {
             try {
               reader.releaseLock();
             } catch (e) {
-              console.error("Error releasing reader lock:", e);
+              // 减少错误日志刷屏，只在调试模式下输出详细信息
+              if (transformer.logger?.debug) {
+                transformer.logger.debug("Error releasing reader lock:", e);
+              }
             }
             controller.close();
           }
@@ -807,10 +907,13 @@ export class OpenAIResponsesTransformer implements Transformer {
       .find((item) => item.type === "message");
     const annotations = this.extractAnnotations(messageOutput?.content);
 
-    this.logger.debug({
-      data: annotations,
-      type: "url_citation",
-    });
+    // 只在有注释且有调试日志时才输出
+    if (annotations && annotations.length > 0 && this.logger?.debug) {
+      this.logger.debug({
+        data: annotations,
+        type: "url_citation",
+      });
+    }
 
     let messageContent: string | MessageContent[] | null = null;
     const toolCalls = this.extractToolCalls(outputItems);

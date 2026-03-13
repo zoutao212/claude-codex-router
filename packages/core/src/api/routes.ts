@@ -6,11 +6,13 @@ import {
 } from "fastify";
 import { RegisterProviderRequest, LLMProvider } from "@/types/llm";
 import { sendUnifiedRequest } from "@/utils/request";
+import { redactHeaders, traceLog, traceStream, traceInit } from "@/utils/trace-logger";
 import { createApiError } from "./middleware";
 import { version } from "../../package.json";
 import { ConfigService } from "@/services/config";
 import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
+
 import { Transformer } from "@/types/transformer";
 
 // Extend FastifyInstance to include custom services
@@ -40,6 +42,17 @@ async function handleTransformerEndpoint(
   const body = req.body as any;
   const providerName = req.provider!;
   const provider = fastify.providerService.getProvider(providerName);
+
+  traceLog({
+    phase: "inbound_request",
+    reqId: (req as any).id,
+    method: (req as any).method,
+    url: req.url,
+    provider: providerName,
+    model: body?.model,
+    headers: redactHeaders(req.headers as any),
+    body,
+  });
 
   // Validate provider exists
   if (!provider) {
@@ -86,6 +99,15 @@ async function handleTransformerEndpoint(
       }
     );
 
+    traceLog({
+      phase: "provider_response_headers",
+      reqId: (req as any).id,
+      provider: providerName,
+      status: response.status,
+      statusText: response.statusText,
+      contentType: response.headers?.get?.("Content-Type"),
+    });
+
     // Process response transformer chain
     const finalResponse = await processResponseTransformers(
       requestBody,
@@ -97,6 +119,15 @@ async function handleTransformerEndpoint(
         req,
       }
     );
+
+    traceLog({
+      phase: "outbound_response_headers",
+      reqId: (req as any).id,
+      provider: providerName,
+      status: finalResponse.status,
+      statusText: finalResponse.statusText,
+      contentType: finalResponse.headers?.get?.("Content-Type"),
+    });
 
     // Format and return response
     return formatResponse(finalResponse, reply, body);
@@ -466,9 +497,38 @@ function formatResponse(response: any, reply: FastifyReply, body: any) {
     reply.header("Content-Type", "text/event-stream");
     reply.header("Cache-Control", "no-cache");
     reply.header("Connection", "keep-alive");
+    if (response.body) {
+      const traced = traceStream({
+        reqId: (reply.request as any).id,
+        stream: response.body,
+        phase: "sse_to_client",
+        meta: {
+          url: (reply.request as any).url,
+        },
+      });
+      return reply.send(traced as any);
+    }
     return reply.send(response.body);
   } else {
     // Handle regular JSON response
+    try {
+      const cloned = response.clone();
+      void cloned.text().then((text: string) => {
+        traceLog({
+          phase: "json_to_client",
+          reqId: (reply.request as any).id,
+          status: response.status,
+          statusText: response.statusText,
+          contentType: response.headers?.get?.("Content-Type"),
+          bodyText: text,
+        });
+      });
+    } catch {
+      traceLog({
+        phase: "json_to_client_clone_failed",
+        reqId: (reply.request as any).id,
+      });
+    }
     return response.json();
   }
 }
@@ -476,9 +536,12 @@ function formatResponse(response: any, reply: FastifyReply, body: any) {
 export const registerApiRoutes = async (
   fastify: FastifyInstance
 ) => {
+  // Emit a trace init line to verify logging works at startup
+  traceInit();
+
   const registerV1CompatibleGet = (
     path: string,
-    handler: Parameters<typeof fastify.get>[1]
+    handler: (request: FastifyRequest, reply: FastifyReply) => any
   ) => {
     fastify.get(path, handler);
     if (path.startsWith("/v1/")) {
@@ -488,7 +551,7 @@ export const registerApiRoutes = async (
 
   const registerV1CompatiblePost = (
     path: string,
-    handler: Parameters<typeof fastify.post>[1]
+    handler: (request: FastifyRequest, reply: FastifyReply) => any
   ) => {
     fastify.post(path, handler);
     if (path.startsWith("/v1/")) {
@@ -497,7 +560,9 @@ export const registerApiRoutes = async (
   };
 
   // Add /v1/models endpoint for Claude Code model discovery
-  registerV1CompatibleGet("/v1/models", async (request, reply) => {
+  registerV1CompatibleGet(
+    "/v1/models",
+    async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       if (request.url.includes("/v1/v1/")) {
         request.log.warn(
@@ -507,10 +572,11 @@ export const registerApiRoutes = async (
       }
       return await fastify.providerService.getAvailableModels();
     } catch (error) {
-      fastify.log.error("Error in /v1/models:", error);
+      fastify.log.error({ err: error }, "Error in /v1/models");
       throw createApiError("Failed to get models", 500, "models_error");
     }
-  });
+    }
+  );
 
   // Health and info endpoints
   fastify.get("/", async () => {

@@ -6,10 +6,11 @@ echo.
 
 REM Check if pnpm is installed
 echo [0/5] Checking pnpm installation...
-pnpm --version >nul 2>&1
+where pnpm >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] pnpm is not installed or not in PATH
     echo Please install pnpm first: npm install -g pnpm
+    echo.
     pause
     exit /b 1
 )
@@ -74,4 +75,5 @@ echo You can now run:
 echo   - start-dev.bat     (Development mode)
 echo   - start-prod.bat    (Production mode)
 echo.
-pause
+echo Press any key to exit...
+pause >nul

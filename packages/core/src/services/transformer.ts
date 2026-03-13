@@ -15,6 +15,10 @@ interface TransformerConfig {
 export class TransformerService {
   private transformers: Map<string, Transformer | TransformerConstructor> =
     new Map();
+  private logBuffer: string[] = [];
+  private logBufferLength = 0;
+  private readonly MIN_LOG_LENGTH = 200;
+  private readonly MAX_LOG_LENGTH = 300;
 
   constructor(
     private readonly configService: ConfigService,
@@ -23,13 +27,36 @@ export class TransformerService {
 
   registerTransformer(name: string, transformer: Transformer): void {
     this.transformers.set(name, transformer);
-    this.logger.info(
+    this.bufferLogMessage(
       `register transformer: ${name}${
         transformer.endPoint
           ? ` (endpoint: ${transformer.endPoint})`
           : " (no endpoint)"
       }`
     );
+  }
+
+  private bufferLogMessage(message: string): void {
+    this.logBuffer.push(message);
+    this.logBufferLength += message.length;
+
+    // Check if buffer should be flushed
+    if (this.logBufferLength >= this.MIN_LOG_LENGTH) {
+      this.flushLogBuffer();
+    }
+  }
+
+  private flushLogBuffer(): void {
+    if (this.logBuffer.length > 0) {
+      this.logger.info(this.logBuffer.join('\n'));
+      this.logBuffer = [];
+      this.logBufferLength = 0;
+    }
+  }
+
+  // Call this method when service is shutting down or when you want to force flush remaining logs
+  forceFlushLogs(): void {
+    this.flushLogBuffer();
   }
 
   getTransformer(

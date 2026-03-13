@@ -36,10 +36,14 @@ echo   - Web UI: http://127.0.0.1:8080
 echo   - Config API: http://127.0.0.1:8080/api/config
 echo   - Config: C:\Users\zouta\.claude-code-router\config.json
 echo.
+echo Trace logging enabled: CCR_TRACE=1
+echo Trace logs will be written to: logs\trace\YYYY-MM-DD.jsonl
+echo.
 echo Press Ctrl+C to stop the server
 echo ========================================
 echo.
 
+set CCR_TRACE=1
 pnpm.cmd dev:server
 
 pause
