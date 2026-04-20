@@ -197,11 +197,23 @@ export interface ConversionOptions {
   sourceProvider: "openai" | "anthropic";
 }
 
+export interface ModelAlias {
+  /** The actual model name sent to the provider's API */
+  name: string;
+  /** One or more alias names that clients can use to reference this model */
+  alias: string | string[];
+}
+
+/** A model entry can be a plain string (the model name) or a ModelAlias object */
+export type ModelEntry = string | ModelAlias;
+
 export interface LLMProvider {
   name: string;
   baseUrl: string;
   apiKey: string;
-  models: string[];
+  models: ModelEntry[];
+  /** Maximum concurrent requests allowed to this provider. Default: Infinity (no limit) */
+  maxConcurrency?: number;
   transformer?: {
     [key: string]: {
       use?: Transformer[];
@@ -211,12 +223,14 @@ export interface LLMProvider {
   };
 }
 
-export type RegisterProviderRequest = LLMProvider;
+export type RegisterProviderRequest = Omit<LLMProvider, 'models'> & { models: ModelEntry[] };
 
 export interface ModelRoute {
   provider: string;
   model: string;
   fullModel: string;
+  /** Aliases that also resolve to this route */
+  aliases?: string[];
 }
 
 export interface RequestRouteInfo {
@@ -229,7 +243,9 @@ export interface ConfigProvider {
   name: string;
   api_base_url: string;
   api_key: string;
-  models: string[];
+  models: ModelEntry[];
+  /** Maximum concurrent requests allowed to this provider. Default: Infinity (no limit) */
+  max_concurrency?: number;
   transformer: {
     use?: string[] | Array<any>[];
   } & {

@@ -268,6 +268,16 @@ class Server {
                   .code(400)
                   .send({ error: "Missing model in request body" });
               }
+              // Apply model migrations (e.g., "gpt-5.4" → "glm-5.1")
+              // This allows clients like Codex to use their native model names
+              // while the router maps them to the actual available models
+              const modelMigrations = this.configService.get<Record<string, string>>("ModelMigrations");
+              if (modelMigrations && body.model in modelMigrations) {
+                const originalModel = body.model;
+                body.model = modelMigrations[body.model];
+                req.log.info(`Model migration: "${originalModel}" → "${body.model}"`);
+              }
+
               // If model contains a comma, it's in "provider,model" format
               if (body.model.includes(",")) {
                 const [provider, ...model] = body.model.split(",");
@@ -276,12 +286,16 @@ class Server {
                 req.model = model;
               } else {
                 // Model without provider prefix — resolve via providerService
-                // (e.g., "glm-5.1" → provider "yuanjing", model "glm-5.1")
+                // (e.g., "glm-5.1" → provider "yuanjing", targetModel "zai-org/GLM-5.1-FP8")
                 const route = this.providerService?.resolveModelRoute?.(body.model);
                 if (route) {
                   req.provider = route.provider.name;
-                  // Don't change body.model — the model name stays as-is
-                  // (the transformer will handle stripping the provider prefix)
+                  // If the resolved target model differs from the requested model (alias case),
+                  // rewrite body.model to the actual model name so the provider receives the correct one
+                  if (route.targetModel !== body.model) {
+                    req.log.info(`Model alias resolved: "${body.model}" → "${route.targetModel}"`);
+                    body.model = route.targetModel;
+                  }
                   req.model = [route.targetModel];
                 } else {
                   // Fallback: use the model name as provider (legacy behavior)

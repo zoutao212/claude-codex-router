@@ -198,10 +198,13 @@ export function getDynamicOptions(
         return [];
       }
 
-      return provider.models.map((model: string) => ({
-        label: model,
-        value: model,
-      }));
+      return provider.models.map((model: any) => {
+        const name = typeof model === 'string' ? model : model.name;
+        return {
+          label: name,
+          value: name,
+        };
+      });
     }
 
     case 'custom':

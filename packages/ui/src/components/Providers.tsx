@@ -868,9 +868,11 @@ export function Providers() {
                 <div className="space-y-2">
                   <Label>{t("providers.model_transformers")}</Label>
                   <div className="space-y-3">
-                    {(editingProvider.models || []).map((model: string, modelIndex: number) => (
+                    {(editingProvider.models || []).map((model: any, modelIndex: number) => {
+                      const modelName = typeof model === 'string' ? model : model.name;
+                      return (
                       <div key={modelIndex} className="border rounded-md p-3">
-                        <div className="font-medium text-sm mb-2">{model}</div>
+                        <div className="font-medium text-sm mb-2">{modelName}</div>
                         {/* Add new transformer */}
                         <div className="flex gap-2">
                           <div className="flex-1 flex gap-2">
@@ -880,9 +882,9 @@ export function Providers() {
                                 value: t.name
                               }))}
                               value=""
-                              onChange={(value) => {
+                                  onChange={(value) => {
                                 if (editingProviderIndex !== null) {
-                                  handleModelTransformerChange(editingProviderIndex, model, value);
+                                  handleModelTransformerChange(editingProviderIndex, modelName, value);
                                 }
                               }}
                               placeholder={t("providers.select_transformer")}
@@ -892,10 +894,10 @@ export function Providers() {
                         </div>
                         
                         {/* Display existing transformers */}
-                        {editingProvider.transformer?.[model]?.use && editingProvider.transformer[model].use.length > 0 && (
+                        {editingProvider.transformer?.[modelName]?.use && editingProvider.transformer[modelName].use.length > 0 && (
                           <div className="space-y-2 mt-2">
                             <div className="text-sm font-medium text-gray-700">{t("providers.selected_transformers")}</div>
-                            {editingProvider.transformer[model].use.map((transformer: string | (string | Record<string, unknown> | { max_tokens: number })[], transformerIndex: number) => (
+                            {editingProvider.transformer[modelName].use.map((transformer: string | (string | Record<string, unknown> | { max_tokens: number })[], transformerIndex: number) => (
                               <div key={transformerIndex} className="border rounded-md p-3">
                                 <div className="flex gap-2 items-center mb-2">
                                   <div className="flex-1 bg-gray-50 rounded p-2 text-sm">
@@ -906,7 +908,7 @@ export function Providers() {
                                     size="icon"
                                     onClick={() => {
                                       if (editingProviderIndex !== null) {
-                                        removeModelTransformerAtIndex(editingProviderIndex, model, transformerIndex);
+                                        removeModelTransformerAtIndex(editingProviderIndex, modelName, transformerIndex);
                                       }
                                     }}
                                   >
@@ -921,9 +923,9 @@ export function Providers() {
                                     <div className="flex gap-2">
                                       <Input 
                                         placeholder={t("providers.parameter_name")}
-                                        value={modelParamInputs[`model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`]?.name || ""}
+                                        value={modelParamInputs[`model-${editingProviderIndex}-${modelName}-transformer-${transformerIndex}`]?.name || ""}
                                         onChange={(e) => {
-                                          const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
+                                          const key = `model-${editingProviderIndex}-${modelName}-transformer-${transformerIndex}`;
                                           setModelParamInputs(prev => ({
                                             ...prev,
                                             [key]: {
@@ -935,9 +937,9 @@ export function Providers() {
                                       />
                                       <Input 
                                         placeholder={t("providers.parameter_value")}
-                                        value={modelParamInputs[`model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`]?.value || ""}
+                                        value={modelParamInputs[`model-${editingProviderIndex}-${modelName}-transformer-${transformerIndex}`]?.value || ""}
                                         onChange={(e) => {
-                                          const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
+                                          const key = `model-${editingProviderIndex}-${modelName}-transformer-${transformerIndex}`;
                                           setModelParamInputs(prev => ({
                                             ...prev,
                                             [key]: {
@@ -951,10 +953,10 @@ export function Providers() {
                                         size="sm"
                                         onClick={() => {
                                           if (editingProviderIndex !== null) {
-                                            const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
+                                            const key = `model-${editingProviderIndex}-${modelName}-transformer-${transformerIndex}`;
                                             const paramInput = modelParamInputs[key];
                                             if (paramInput && paramInput.name && paramInput.value) {
-                                              addModelTransformerParameter(editingProviderIndex, model, transformerIndex, paramInput.name, paramInput.value);
+                                              addModelTransformerParameter(editingProviderIndex, modelName, transformerIndex, paramInput.name, paramInput.value);
                                               setModelParamInputs(prev => ({
                                                 ...prev,
                                                 [key]: {name: "", value: ""}
@@ -970,11 +972,11 @@ export function Providers() {
                                     {/* Display existing parameters for this transformer */}
                                     {(() => {
                                       // Get parameters for this specific transformer
-                                      if (!editingProvider.transformer?.[model]?.use || editingProvider.transformer[model].use.length <= transformerIndex) {
+                                      if (!editingProvider.transformer?.[modelName]?.use || editingProvider.transformer[modelName].use.length <= transformerIndex) {
                                         return null;
                                       }
-                                      
-                                      const targetTransformer = editingProvider.transformer[model].use[transformerIndex];
+
+                                      const targetTransformer = editingProvider.transformer[modelName].use[transformerIndex];
                                       let params = {};
                                       
                                       if (Array.isArray(targetTransformer) && targetTransformer.length > 1) {
@@ -1016,7 +1018,7 @@ export function Providers() {
                           </div>
                         )}
                       </div>
-                    ))}
+                    );})}
                   </div>
                 </div>
               )}

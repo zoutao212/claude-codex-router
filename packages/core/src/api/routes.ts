@@ -63,6 +63,9 @@ async function handleTransformerEndpoint(
     );
   }
 
+  // Acquire concurrency slot for this provider
+  const release = await fastify.providerService.semaphore.acquire(providerName);
+
   try {
     if (req.url.includes("/v1/v1/")) {
       req.log.warn(
@@ -130,16 +133,25 @@ async function handleTransformerEndpoint(
     });
 
     // Format and return response
-    return formatResponse(finalResponse, reply, body);
+    return formatResponse(finalResponse, reply, body, release);
   } catch (error: any) {
     // Handle fallback if error occurs
     if (error.code === 'provider_response_error') {
       const fallbackResult = await handleFallback(req, reply, fastify, transformer, error);
       if (fallbackResult) {
+        // Fallback succeeded — release original provider's slot
+        // (fallback already released its own slot via finally in handleFallback)
+        release();
         return fallbackResult;
       }
     }
     throw error;
+  } finally {
+    // Release concurrency slot only for non-stream responses or errors.
+    // For streaming responses, release is handled after stream ends in formatResponse.
+    // We check if release was already consumed by formatResponse or fallback path.
+    // This is safe because release() is idempotent.
+    release();
   }
 }
 
@@ -170,6 +182,7 @@ async function handleFallback(
 
   // Try each fallback model in sequence
   for (const fallbackModel of fallbackList) {
+    let fallbackRelease: (() => void) | null = null;
     try {
       req.log.info(`Trying fallback model: ${fallbackModel}`);
 
@@ -190,6 +203,9 @@ async function handleFallback(
         req.log.warn(`Fallback provider '${fallbackProvider}' not found, skipping`);
         continue;
       }
+
+      // Acquire concurrency slot for fallback provider
+      fallbackRelease = await fastify.providerService.semaphore.acquire(fallbackProvider);
 
       // Process request transformer chain
       const { requestBody, config, bypass } = await processRequestTransformers(
@@ -228,6 +244,9 @@ async function handleFallback(
     } catch (fallbackError: any) {
       req.log.warn(`Fallback model ${fallbackModel} failed: ${fallbackError.message}`);
       continue;
+    } finally {
+      // Release fallback provider's concurrency slot
+      fallbackRelease?.();
     }
   }
 
@@ -490,8 +509,10 @@ async function processResponseTransformers(
 /**
  * Format and return response
  * Handle HTTP status codes, format streaming and regular responses
+ * For streaming responses, the release function is called when the stream ends
+ * to properly respect provider concurrency limits.
  */
-function formatResponse(response: any, reply: FastifyReply, body: any) {
+function formatResponse(response: any, reply: FastifyReply, body: any, release?: () => void) {
   // Set HTTP status code
   if (!response.ok) {
     reply.code(response.status);
@@ -512,11 +533,26 @@ function formatResponse(response: any, reply: FastifyReply, body: any) {
           url: (reply.request as any).url,
         },
       });
+
+      // Wrap the stream to release the semaphore when the stream ends
+      if (release) {
+        const originalStream = traced as any;
+        const wrappedStream = wrapStreamWithRelease(originalStream, release);
+        return reply.send(wrappedStream as any);
+      }
+
       return reply.send(traced as any);
     }
+
+    if (release) {
+      const originalStream = response.body as any;
+      const wrappedStream = wrapStreamWithRelease(originalStream, release);
+      return reply.send(wrappedStream as any);
+    }
+
     return reply.send(response.body);
   } else {
-    // Handle regular JSON response
+    // Handle regular JSON response — release immediately since response is complete
     try {
       const cloned = response.clone();
       void cloned.text().then((text: string) => {
@@ -537,6 +573,58 @@ function formatResponse(response: any, reply: FastifyReply, body: any) {
     }
     return response.json();
   }
+}
+
+/**
+ * Wrap a stream so that the release function is called
+ * when the stream finishes (either normally or on error).
+ * Handles both Web ReadableStream and Node.js Readable streams.
+ */
+function wrapStreamWithRelease(stream: any, release: () => void): any {
+  let released = false;
+  const safeRelease = () => {
+    if (!released) {
+      released = true;
+      release();
+    }
+  };
+
+  // Web ReadableStream (has getReader method)
+  if (typeof stream.getReader === "function") {
+    const reader = stream.getReader();
+    return new ReadableStream({
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            safeRelease();
+            return;
+          }
+          controller.enqueue(value);
+        } catch (error) {
+          controller.error(error);
+          safeRelease();
+        }
+      },
+      cancel() {
+        reader.cancel();
+        safeRelease();
+      },
+    });
+  }
+
+  // Node.js Readable stream (has on/pipe methods, no getReader)
+  if (typeof stream.on === "function") {
+    stream.on("end", safeRelease);
+    stream.on("error", safeRelease);
+    stream.on("close", safeRelease);
+    return stream;
+  }
+
+  // Unknown stream type — just release immediately after a short delay
+  safeRelease();
+  return stream;
 }
 
 export const registerApiRoutes = async (
@@ -593,6 +681,16 @@ export const registerApiRoutes = async (
     return { status: "ok", timestamp: new Date().toISOString() };
   });
 
+  // Concurrency status endpoint — shows per-provider concurrency stats
+  fastify.get("/v1/concurrency", async () => {
+    const providers = fastify.providerService.getProviders();
+    const stats: Record<string, { active: number; queued: number; limit: number | undefined }> = {};
+    for (const provider of providers) {
+      stats[provider.name] = fastify.providerService.semaphore.getStats(provider.name);
+    }
+    return { timestamp: new Date().toISOString(), providers: stats };
+  });
+
   const transformersWithEndpoint =
     fastify.transformerService.getTransformersWithEndpoint();
 
@@ -619,7 +717,7 @@ export const registerApiRoutes = async (
             type: { type: "string", enum: ["openai", "anthropic"] },
             baseUrl: { type: "string" },
             apiKey: { type: "string" },
-            models: { type: "array", items: { type: "string" } },
+            models: { type: "array" },
           },
           required: ["id", "name", "type", "baseUrl", "apiKey", "models"],
         },

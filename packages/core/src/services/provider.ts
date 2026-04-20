@@ -5,15 +5,41 @@ import {
   ModelRoute,
   RequestRouteInfo,
   ConfigProvider,
+  ModelEntry,
+  ModelAlias,
 } from "../types/llm";
 import { ConfigService } from "./config"; 
 import { TransformerService } from "./transformer";
+import { ProviderSemaphore } from "../utils/semaphore";
+
+/**
+ * Normalize a ModelEntry to always return the actual model name string.
+ * - If it's a plain string, return it as-is.
+ * - If it's a ModelAlias object, return its .name field.
+ */
+function normalizeModelName(entry: ModelEntry): string {
+  return typeof entry === "string" ? entry : entry.name;
+}
+
+/**
+ * Extract aliases from a ModelEntry.
+ * - Plain string: no aliases.
+ * - ModelAlias object: returns the alias array (always string[]).
+ */
+function extractAliases(entry: ModelEntry): string[] {
+  if (typeof entry === "string") return [];
+  const alias = (entry as ModelAlias).alias;
+  if (!alias) return [];
+  return Array.isArray(alias) ? alias : [alias];
+}
 
 export class ProviderService {
   private providers: Map<string, LLMProvider> = new Map();
   private modelRoutes: Map<string, ModelRoute> = new Map();
+  readonly semaphore: ProviderSemaphore;
 
   constructor(private readonly configService: ConfigService, private readonly transformerService: TransformerService, private readonly logger: any) {
+    this.semaphore = new ProviderSemaphore(logger);
     this.initializeCustomProviders();
   }
 
@@ -92,6 +118,7 @@ export class ProviderService {
           baseUrl: normalizedProviderConfig.api_base_url,
           apiKey: normalizedProviderConfig.api_key,
           models: normalizedProviderConfig.models || [],
+          maxConcurrency: normalizedProviderConfig.max_concurrency,
           transformer: this.hasTransformerEntries(transformer)
             ? transformer
             : undefined,
@@ -152,22 +179,47 @@ export class ProviderService {
   }
 
   registerProvider(request: RegisterProviderRequest): LLMProvider {
+    // Normalize models to plain strings for the internal LLMProvider
+    const normalizedModels = request.models.map((m) => normalizeModelName(m));
     const provider: LLMProvider = {
       ...request,
+      models: normalizedModels,
     };
 
     this.providers.set(provider.name, provider);
 
-    request.models.forEach((model) => {
-      const fullModel = `${provider.name},${model}`;
+    // Register concurrency limit with the semaphore
+    this.semaphore.setLimit(provider.name, provider.maxConcurrency);
+
+    request.models.forEach((entry) => {
+      const modelName = normalizeModelName(entry);
+      const aliases = extractAliases(entry);
+      const fullModel = `${provider.name},${modelName}`;
       const route: ModelRoute = {
         provider: provider.name,
-        model,
+        model: modelName,
         fullModel,
+        aliases: aliases.length > 0 ? aliases : undefined,
       };
+
+      // Register the full "provider,model" route
       this.modelRoutes.set(fullModel, route);
-      if (!this.modelRoutes.has(model)) {
-        this.modelRoutes.set(model, route);
+
+      // Register the bare model name as a route (if not already taken)
+      if (!this.modelRoutes.has(modelName)) {
+        this.modelRoutes.set(modelName, route);
+      }
+
+      // Register each alias as an additional route pointing to the same model
+      for (const alias of aliases) {
+        if (!this.modelRoutes.has(alias)) {
+          this.modelRoutes.set(alias, route);
+        }
+        // Also register "provider,alias" format
+        const fullAlias = `${provider.name},${alias}`;
+        if (!this.modelRoutes.has(fullAlias)) {
+          this.modelRoutes.set(fullAlias, route);
+        }
       }
     });
 
@@ -200,22 +252,43 @@ export class ProviderService {
     this.providers.set(id, updatedProvider);
 
     if (updates.models) {
-      provider.models.forEach((model) => {
-        const fullModel = `${provider.name},${model}`;
+      // Clean up old routes
+      provider.models.forEach((modelEntry) => {
+        const modelName = normalizeModelName(modelEntry);
+        const fullModel = `${provider.name},${modelName}`;
         this.modelRoutes.delete(fullModel);
-        this.modelRoutes.delete(model);
+        this.modelRoutes.delete(modelName);
+        // Also clean up any aliases from old routes
+        const aliases = extractAliases(modelEntry);
+        for (const alias of aliases) {
+          this.modelRoutes.delete(alias);
+          this.modelRoutes.delete(`${provider.name},${alias}`);
+        }
       });
 
-      updates.models.forEach((model) => {
-        const fullModel = `${provider.name},${model}`;
+      // Register new routes
+      updates.models.forEach((modelEntry) => {
+        const modelName = normalizeModelName(modelEntry);
+        const aliases = extractAliases(modelEntry);
+        const fullModel = `${provider.name},${modelName}`;
         const route: ModelRoute = {
           provider: provider.name,
-          model,
+          model: modelName,
           fullModel,
+          aliases: aliases.length > 0 ? aliases : undefined,
         };
         this.modelRoutes.set(fullModel, route);
-        if (!this.modelRoutes.has(model)) {
-          this.modelRoutes.set(model, route);
+        if (!this.modelRoutes.has(modelName)) {
+          this.modelRoutes.set(modelName, route);
+        }
+        for (const alias of aliases) {
+          if (!this.modelRoutes.has(alias)) {
+            this.modelRoutes.set(alias, route);
+          }
+          const fullAlias = `${provider.name},${alias}`;
+          if (!this.modelRoutes.has(fullAlias)) {
+            this.modelRoutes.set(fullAlias, route);
+          }
         }
       });
     }
@@ -229,11 +302,21 @@ export class ProviderService {
       return false;
     }
 
-    provider.models.forEach((model) => {
-      const fullModel = `${provider.name},${model}`;
+    provider.models.forEach((modelEntry) => {
+      const modelName = normalizeModelName(modelEntry);
+      const fullModel = `${provider.name},${modelName}`;
       this.modelRoutes.delete(fullModel);
-      this.modelRoutes.delete(model);
+      this.modelRoutes.delete(modelName);
+      // Also clean up aliases
+      const aliases = extractAliases(modelEntry);
+      for (const alias of aliases) {
+        this.modelRoutes.delete(alias);
+        this.modelRoutes.delete(`${provider.name},${alias}`);
+      }
     });
+
+    // Clean up semaphore limit
+    this.semaphore.removeLimit(provider.name);
 
     this.providers.delete(id);
     return true;
@@ -266,14 +349,8 @@ export class ProviderService {
   }
 
   getAvailableModelNames(): string[] {
-    const modelNames: string[] = [];
-    this.providers.forEach((provider) => {
-      provider.models.forEach((model) => {
-        modelNames.push(model);
-        modelNames.push(`${provider.name},${model}`);
-      });
-    });
-    return modelNames;
+    // Return all keys from modelRoutes (includes actual model names + aliases)
+    return Array.from(this.modelRoutes.keys());
   }
 
   getModelRoutes(): ModelRoute[] {
@@ -313,24 +390,18 @@ export class ProviderService {
       owned_by: string;
       provider: string;
     }> = [];
+    const seenIds = new Set<string>();
 
-    this.providers.forEach((provider) => {
-      provider.models.forEach((model) => {
-        // Return model name as primary ID (what Claude Code expects)
-        models.push({
-          id: model,
-          object: "model",
-          owned_by: provider.name,
-          provider: provider.name,
-        });
+    // Iterate modelRoutes to include all registered names (actual + aliases)
+    this.modelRoutes.forEach((route, key) => {
+      if (seenIds.has(key)) return;
+      seenIds.add(key);
 
-        // Also include provider,model format for compatibility
-        models.push({
-          id: `${provider.name},${model}`,
-          object: "model",
-          owned_by: provider.name,
-          provider: provider.name,
-        });
+      models.push({
+        id: key,
+        object: "model",
+        owned_by: route.provider,
+        provider: route.provider,
       });
     });
 

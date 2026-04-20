@@ -132,15 +132,31 @@ const getUseModel = async (
   const Router = projectSpecificRouter || configService.get("Router");
 
   if (req.body.model.includes(",")) {
-    const [provider, model] = req.body.model.split(",");
+    const [provider, ...modelParts] = req.body.model.split(",");
+    const model = modelParts.join(",");
     const finalProvider = providers.find(
-      (p: any) => p.name.toLowerCase() === provider
+      (p: any) => p.name.toLowerCase() === provider.toLowerCase()
     );
-    const finalModel = finalProvider?.models?.find(
-      (m: any) => m.toLowerCase() === model
+    // Normalize model entries: each entry can be a string or {name, alias} object
+    const modelNames: string[] = [];
+    if (finalProvider?.models) {
+      for (const m of finalProvider.models) {
+        if (typeof m === 'string') {
+          modelNames.push(m);
+        } else if (m && typeof m === 'object') {
+          if (m.name) modelNames.push(m.name);
+          if (m.alias) {
+            if (Array.isArray(m.alias)) modelNames.push(...m.alias);
+            else modelNames.push(m.alias);
+          }
+        }
+      }
+    }
+    const matchedModel = modelNames.find(
+      (m: string) => m.toLowerCase() === model.toLowerCase()
     );
-    if (finalProvider && finalModel) {
-      return { model: `${finalProvider.name},${finalModel}`, scenarioType: 'default' };
+    if (finalProvider && matchedModel) {
+      return { model: `${finalProvider.name},${matchedModel}`, scenarioType: 'default' };
     }
     return { model: req.body.model, scenarioType: 'default' };
   }
