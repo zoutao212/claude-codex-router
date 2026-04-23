@@ -251,7 +251,7 @@ class Server {
   }
 
   async start(): Promise<void> {
-    console.log('🚀 Server.start() method ENTERED');
+    console.log('Server.start() method ENTERED');
     console.log('Server.start() method entered');
 
     // Ensure providerService is initialized before proceeding
@@ -357,7 +357,7 @@ class Server {
 
       console.log(`Server successfully listening on ${address}`);
 
-      this.app.log.info(`🚀 LLMs API server listening on ${address}`);
+      this.app.log.info(`LLMs API server listening on ${address}`);
 
       const shutdown = async (signal: string) => {
         this.app.log.info(`Received ${signal}, shutting down gracefully...`);
@@ -503,11 +503,11 @@ class Server {
     // Start listening
     const address = await listenerApp.listen({ port, host });
     this.listenerApps.set(name, listenerApp);
-    this.app.log.info(`📡 Listener '${name}' (${protocol}) listening on ${address}`);
+    this.app.log.info(`Listener '${name}' (${protocol}) listening on ${address}`);
 
     // Debug: print registered routes
     const routes = listenerApp.printRoutes();
-    this.app.log.info(`📡 Listener '${name}' registered routes: ${routes}`);
+    this.app.log.info(`Listener '${name}' registered routes: ${routes}`);
   }
 
   /**

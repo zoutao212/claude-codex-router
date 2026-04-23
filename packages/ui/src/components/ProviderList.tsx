@@ -59,12 +59,14 @@ export function ProviderList({ providers, onEdit, onRemove }: ProviderListProps)
               <p className="text-md font-semibold text-gray-800">{providerName}</p>
               <p className="text-sm text-gray-500">{apiBaseUrl}</p>
               <div className="flex flex-wrap gap-2 pt-2">
-                {models.map((model, modelIndex) => (
-                  // Handle case where model might be null or undefined
-                  <Badge key={modelIndex} variant="outline" className="font-normal transition-all-ease hover:scale-105">
-                    {model || "Unnamed Model"}
-                  </Badge>
-                ))}
+                {models.map((model, modelIndex) => {
+                  const modelName = typeof model === 'string' ? model : (model?.name || 'Unnamed Model');
+                  return (
+                    <Badge key={modelIndex} variant="outline" className="font-normal transition-all-ease hover:scale-105">
+                      {modelName}
+                    </Badge>
+                  );
+                })}
               </div>
             </div>
             <div className="ml-4 flex flex-shrink-0 items-center gap-2">

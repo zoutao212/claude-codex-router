@@ -699,18 +699,21 @@ export function Providers() {
                     </Button> */}
                   </div>
                   <div className="flex flex-wrap gap-2 pt-2">
-                    {(editingProvider.models || []).map((model: string, modelIndex: number) => (
-                      <Badge key={modelIndex} variant="outline" className="font-normal flex items-center gap-1">
-                        {model}
-                        <button 
-                          type="button" 
-                          className="ml-1 rounded-full hover:bg-gray-200"
-                          onClick={() => editingProviderIndex !== null && handleRemoveModel(editingProviderIndex, modelIndex)}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
+                    {(editingProvider.models || []).map((model: any, modelIndex: number) => {
+                      const modelName = typeof model === 'string' ? model : (model?.name || 'Unnamed Model');
+                      return (
+                        <Badge key={modelIndex} variant="outline" className="font-normal flex items-center gap-1">
+                          {modelName}
+                          <button 
+                            type="button" 
+                            className="ml-1 rounded-full hover:bg-gray-200"
+                            onClick={() => editingProviderIndex !== null && handleRemoveModel(editingProviderIndex, modelIndex)}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      );
+                    })}
                   </div>
                 </div>
               </div>

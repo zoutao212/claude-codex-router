@@ -49,19 +49,18 @@ export function Router() {
   const providers = Array.isArray(config.Providers) ? config.Providers : [];
   
   const modelOptions = providers.flatMap((provider) => {
-    // Handle case where individual provider might be null or undefined
     if (!provider) return [];
     
-    // Handle case where provider.models might be null or undefined
     const models = Array.isArray(provider.models) ? provider.models : [];
-    
-    // Handle case where provider.name might be null or undefined
     const providerName = provider.name || "Unknown Provider";
     
-    return models.map((model) => ({
-      value: `${providerName},${model || "Unknown Model"}`,
-      label: `${providerName}, ${model || "Unknown Model"}`,
-    }));
+    return models.map((model) => {
+      const modelName = typeof model === 'string' ? model : (model?.name || "Unknown Model");
+      return {
+        value: `${providerName},${modelName}`,
+        label: `${providerName}, ${modelName}`,
+      };
+    });
   });
 
   return (
