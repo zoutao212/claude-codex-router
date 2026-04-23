@@ -92,6 +92,19 @@ export class OpenAIResponsesTransformer implements Transformer {
    * If the request is already in Chat Completions format (has 'messages' field),
    * pass it through unchanged.
    */
+  async auth(request: any, provider: LLMProvider): Promise<any> {
+    return {
+      body: request,
+      config: {
+        url: this.buildChatCompletionsUrl(provider.baseUrl),
+        headers: {
+          'Authorization': `Bearer ${provider.apiKey}`,
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+      },
+    };
+  }
+
   async transformRequestOut(
     request: Record<string, any>
   ): Promise<UnifiedChatRequest> {

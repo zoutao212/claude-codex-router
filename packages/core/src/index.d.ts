@@ -1,5 +1,16 @@
 // Type declarations for @musistudio/llms
 
+// Listener types
+export type ListenerProtocol = "openai" | "anthropic" | "all";
+
+export interface ListenerConfig {
+  name: string;
+  port: number;
+  host?: string;
+  protocol: ListenerProtocol;
+  apiKey?: string;
+}
+
 // Main Server class
 export declare class Server {
   constructor(options?: any);
@@ -7,6 +18,8 @@ export declare class Server {
   addHook(hookName: string, hookFunction: any): void;
   registerNamespace(name: string, options?: any): Promise<void>;
   start(): Promise<void>;
+  startListeners(): Promise<void>;
+  stopListeners(): Promise<void>;
   app: any;
   configService: ConfigService;
   providerService: ProviderService;

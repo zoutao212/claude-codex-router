@@ -617,6 +617,9 @@ async function run() {
     console.log('Starting server...');
     await startPromise;
     console.log('Server started successfully');
+
+    // Start additional protocol listeners if configured
+    await server.startListeners();
   } catch (error) {
     console.error('Failed to start server:', error);
     console.error('Error stack:', error instanceof Error ? error.stack : 'No stack trace');

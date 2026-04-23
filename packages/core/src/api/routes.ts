@@ -33,7 +33,7 @@ declare module "fastify" {
  * Coordinates the entire request processing flow: validate provider, handle request transformers,
  * send request, handle response transformers, format response
  */
-async function handleTransformerEndpoint(
+export async function handleTransformerEndpoint(
   req: FastifyRequest,
   reply: FastifyReply,
   fastify: FastifyInstance,
@@ -274,10 +274,16 @@ async function processRequestTransformers(
   bypass = shouldBypassTransformers(provider, transformer, body);
 
   if (bypass) {
+    // Clean up headers that should not be forwarded to downstream providers
+    const headersToClean = ["content-length", "host", "x-api-key", "connection", "transfer-encoding"];
     if (headers instanceof Headers) {
-      headers.delete("content-length");
-    } else {
-      delete headers["content-length"];
+      for (const h of headersToClean) {
+        headers.delete(h);
+      }
+    } else if (headers && typeof headers === "object") {
+      for (const h of headersToClean) {
+        delete headers[h];
+      }
     }
     config.headers = headers;
   }
@@ -373,8 +379,6 @@ async function sendRequestToProvider(
   transformer: any,
   context: any
 ) {
-  const url = config.url || new URL(provider.baseUrl);
-
   // Handle authentication in passthrough mode
   if (bypass && typeof transformer.auth === "function") {
     const auth = await transformer.auth(requestBody, provider);
@@ -398,6 +402,9 @@ async function sendRequestToProvider(
       requestBody = auth;
     }
   }
+
+  // Resolve URL after auth processing so that auth can override the URL
+  const url = config.url || new URL(provider.baseUrl);
 
   // Send HTTP request
   // Prepare headers
