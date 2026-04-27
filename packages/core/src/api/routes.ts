@@ -40,7 +40,28 @@ export async function handleTransformerEndpoint(
   transformer: any
 ) {
   const body = req.body as any;
-  const providerName = req.provider!;
+  
+  // Defensive: if req.provider contains a "/" it means the preHandler didn't split it
+  // (e.g., "opencode/deepseek-v4-flash" should be provider="opencode", model="deepseek-v4-flash")
+  let providerName = req.provider!;
+  if (providerName && providerName.includes("/")) {
+    const [provider, ...modelParts] = providerName.split("/");
+    providerName = provider;
+    // Also fix body.model if it wasn't split by the preHandler
+    if (body && (!body.model || body.model === providerName)) {
+      body.model = modelParts.join("/");
+    }
+  }
+  // Also check if body.model still contains a "/" prefix (preHandler may not have run)
+  if (body?.model?.includes("/") && (!providerName || !fastify.providerService.getProvider(providerName))) {
+    const [provider, ...modelParts] = body.model.split("/");
+    const resolvedProvider = fastify.providerService.getProvider(provider);
+    if (resolvedProvider) {
+      providerName = provider;
+      body.model = modelParts.join("/");
+    }
+  }
+  
   const provider = fastify.providerService.getProvider(providerName);
 
   traceLog({
@@ -275,7 +296,10 @@ async function processRequestTransformers(
 
   if (bypass) {
     // Clean up headers that should not be forwarded to downstream providers
-    const headersToClean = ["content-length", "host", "x-api-key", "connection", "transfer-encoding"];
+    // IMPORTANT: "authorization" MUST be cleaned here — otherwise the client's
+    // Authorization header (with the router's API key) leaks into config.headers
+    // and overrides the provider's API key in sendUnifiedRequest (Headers is case-insensitive).
+    const headersToClean = ["content-length", "host", "x-api-key", "authorization", "connection", "transfer-encoding"];
     if (headers instanceof Headers) {
       for (const h of headersToClean) {
         headers.delete(h);

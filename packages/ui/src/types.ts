@@ -3,11 +3,21 @@ export interface ProviderTransformer {
   [key: string]: any; // Allow for model-specific transformers
 }
 
+export interface ModelAlias {
+  name: string;
+  alias?: string | string[];
+  context_length?: number;
+  [key: string]: any;
+}
+
+/** A model entry can be a plain string (the model name) or a ModelAlias object */
+export type ModelEntry = string | ModelAlias;
+
 export interface Provider {
   name: string;
   api_base_url: string;
   api_key: string;
-  models: string[];
+  models: ModelEntry[];
   transformer?: ProviderTransformer;
 }
 

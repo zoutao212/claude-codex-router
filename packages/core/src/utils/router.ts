@@ -304,11 +304,37 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
       // Custom router doesn't provide scenario type, default to 'default'
       req.scenarioType = 'default';
     }
-    req.body.model = model;
+    // The router may have changed the provider (e.g., from client-specified to Router.default),
+    // so we ALWAYS split provider/model from the routed result, regardless of whether
+    // req.provider was already set by the model provider middleware.
+    if (model && model.includes("/")) {
+      const [provider, ...modelParts] = model.split("/");
+      req.provider = provider;
+      req.body.model = modelParts.join("/");
+    } else {
+      req.body.model = model;
+      // Model without provider prefix — try to resolve via providerService
+      if (!req.provider) {
+        const providerService = (req as any).providerService;
+        if (providerService) {
+          const route = providerService.resolveModelRoute?.(model);
+          if (route) {
+            req.provider = route.provider.name;
+          }
+        }
+      }
+    }
   } catch (error: any) {
     req.log.error(`Error in router middleware: ${error.message}`);
     const Router = configService.get("Router");
-    req.body.model = Router?.default;
+    const defaultModel = Router?.default;
+    if (defaultModel && defaultModel.includes("/")) {
+      const [provider, ...modelParts] = defaultModel.split("/");
+      req.provider = provider;
+      req.body.model = modelParts.join("/");
+    } else {
+      req.body.model = defaultModel;
+    }
     req.scenarioType = 'default';
   }
   return;

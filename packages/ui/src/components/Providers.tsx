@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
 import { ComboInput } from "@/components/ui/combo-input";
 import { api } from "@/lib/api";
-import type { Provider } from "@/types";
+import type { Provider, ModelEntry } from "@/types";
 
 interface ProviderType extends Provider {}
 
@@ -451,11 +451,13 @@ export function Providers() {
     const updatedProvider = { ...editingProviderData };
     
     // Handle case where provider.models might be null or undefined
-    const models = Array.isArray(updatedProvider.models) ? [...updatedProvider.models] : [];
+    const models: ModelEntry[] = Array.isArray(updatedProvider.models) ? [...updatedProvider.models] : [];
     
     // Check if model already exists
-    if (!models.includes(model.trim())) {
-      models.push(model.trim());
+    const modelName = model.trim();
+    const exists = models.some(m => typeof m === 'string' ? m === modelName : m.name === modelName);
+    if (!exists) {
+      models.push(modelName);
       updatedProvider.models = models;
       setEditingProviderData(updatedProvider);
     }
@@ -512,7 +514,7 @@ export function Providers() {
     // Check models
     if (provider.models && Array.isArray(provider.models)) {
       return provider.models.some(model => 
-        model && model.toLowerCase().includes(term)
+        model && (typeof model === 'string' ? model : model.name).toLowerCase().includes(term)
       );
     }
     return false;
@@ -642,7 +644,7 @@ export function Providers() {
                       {hasFetchedModels[editingProviderIndex] ? (
                         <ComboInput
                           ref={comboInputRef}
-                          options={(editingProvider.models || []).map((model: string) => ({ label: model, value: model }))}
+                          options={(editingProvider.models || []).map((model: ModelEntry) => ({ label: typeof model === 'string' ? model : model.name, value: typeof model === 'string' ? model : model.name }))}
                           value=""
                           onChange={() => {
                             // 只更新输入值，不添加模型

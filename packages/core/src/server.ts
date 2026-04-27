@@ -192,7 +192,7 @@ class Server {
         // Add router hook for main namespace
         fastify.addHook('preHandler', async (req: any, reply: any) => {
           const url = new URL(`http://127.0.0.1${req.url}`);
-          if (url.pathname.endsWith("/v1/messages")) {
+          if (url.pathname.endsWith("/v1/messages") || url.pathname.endsWith("/v1/chat/completions") || url.pathname.endsWith("/v1/responses")) {
             // Skip router if model provider middleware already resolved the provider
             if (!req.provider) {
               await router(req, reply, {
@@ -236,7 +236,7 @@ class Server {
       // Add router hook for namespace
       fastify.addHook('preHandler', async (req: any, reply: any) => {
         const url = new URL(`http://127.0.0.1${req.url}`);
-        if (url.pathname.endsWith("/v1/messages")) {
+        if (url.pathname.endsWith("/v1/messages") || url.pathname.endsWith("/v1/chat/completions") || url.pathname.endsWith("/v1/responses")) {
           // Skip router if model provider middleware already resolved the provider
           if (!req.provider) {
             await router(req, reply, {
@@ -285,9 +285,8 @@ class Server {
         done();
       });
 
-      console.log('Registering namespace');
-      await this.registerNamespace('/')
-
+      // IMPORTANT: model provider middleware MUST be registered BEFORE registerNamespace
+      // so it runs before the router hook (Fastify executes hooks in registration order)
       console.log('Adding model provider middleware');
       this.app.addHook(
         "preHandler",
@@ -344,6 +343,9 @@ class Server {
           }
         }
       );
+
+      console.log('Registering namespace');
+      await this.registerNamespace('/')
 
       console.log('Server.start() called');
       const port = parseInt(this.configService.get("PORT") || "3000", 10);
@@ -470,7 +472,7 @@ class Server {
     // Add router hook
     listenerApp.addHook('preHandler', async (req: any, reply: any) => {
       const url = new URL(`http://127.0.0.1${req.url}`);
-      if (url.pathname.endsWith("/v1/messages")) {
+      if (url.pathname.endsWith("/v1/messages") || url.pathname.endsWith("/v1/chat/completions") || url.pathname.endsWith("/v1/responses")) {
         // Skip router if model provider middleware already resolved the provider
         if (!req.provider) {
           await router(req, reply, {
@@ -507,7 +509,15 @@ class Server {
 
     // Debug: print registered routes
     const routes = listenerApp.printRoutes();
-    this.app.log.info(`Listener '${name}' registered routes: ${routes}`);
+    // Replace Unicode box-drawing characters with ASCII equivalents for Windows compatibility
+    const asciiRoutes = routes
+      .replace(/├/g, '|')
+      .replace(/└/g, '`')
+      .replace(/│/g, '|')
+      .replace(/─/g, '-')
+      .replace(/┬/g, '+')
+      .replace(/┴/g, '+');
+    this.app.log.info(`Listener '${name}' registered routes: ${asciiRoutes}`);
   }
 
   /**
